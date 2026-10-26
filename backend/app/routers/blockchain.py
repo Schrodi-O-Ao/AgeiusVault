@@ -1,15 +1,17 @@
 """
 API router for blockchain audit trail operations.
 """
-from fastapi import APIRouter, Depends, HTTPException
+
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
-import uuid
 
 from app.database import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.services.blockchain_audit import BlockchainAuditService, MockBlockchainAuditService
+from app.services.blockchain_audit import (
+    BlockchainAuditService,
+    MockBlockchainAuditService,
+)
 
 router = APIRouter()
 
@@ -18,7 +20,7 @@ def get_blockchain_service(db: AsyncSession) -> BlockchainAuditService:
     """Get blockchain service (uses mock if real blockchain unavailable)."""
     try:
         return BlockchainAuditService(db)
-    except Exception:
+    except (ValueError, ConnectionError, OSError, RuntimeError):
         # Fall back to mock service if blockchain initialization fails
         return MockBlockchainAuditService(db)
 
@@ -33,7 +35,7 @@ async def get_blockchain_status(
     """
     service = get_blockchain_service(db)
     status = await service.get_blockchain_status()
-    
+
     return status
 
 
@@ -48,17 +50,14 @@ async def register_audit_entry(
 ):
     """
     Register a single audit entry on the blockchain.
-    
+
     Admin only endpoint - typically called automatically during audit logging.
     """
     service = get_blockchain_service(db)
     result = await service.register_audit_entry(
-        entry_id,
-        request_id,
-        chain_hash,
-        previous_hash
+        entry_id, request_id, chain_hash, previous_hash
     )
-    
+
     if result:
         return {
             "success": True,
@@ -66,14 +65,11 @@ async def register_audit_entry(
                 "entry_id": result.entry_id,
                 "block_number": result.block_number,
                 "transaction_hash": result.transaction_hash,
-                "network": result.network
-            }
+                "network": result.network,
+            },
         }
     else:
-        return {
-            "success": False,
-            "message": "Failed to register entry on blockchain"
-        }
+        return {"success": False, "message": "Failed to register entry on blockchain"}
 
 
 @router.post("/register-chain/{request_id}")
@@ -84,12 +80,12 @@ async def register_entire_chain(
 ):
     """
     Register an entire audit chain on the blockchain.
-    
+
     Admin only endpoint - useful for backfilling or completed requests.
     """
     service = get_blockchain_service(db)
     registered_entries = await service.register_entire_chain(request_id)
-    
+
     return {
         "success": True,
         "request_id": request_id,
@@ -98,10 +94,10 @@ async def register_entire_chain(
             {
                 "entry_id": entry.entry_id,
                 "block_number": entry.block_number,
-                "transaction_hash": entry.transaction_hash
+                "transaction_hash": entry.transaction_hash,
             }
             for entry in registered_entries
-        ]
+        ],
     }
 
 
@@ -113,12 +109,12 @@ async def verify_chain_integrity(
 ):
     """
     Verify audit chain integrity using blockchain records.
-    
+
     Compares local audit chain hashes with blockchain-registered hashes.
     """
     service = get_blockchain_service(db)
     verification = await service.verify_chain_integrity(request_id)
-    
+
     return verification
 
 
@@ -130,12 +126,12 @@ async def get_verification_proof(
 ):
     """
     Get a cryptographic proof of audit chain integrity.
-    
+
     Provides a Merkle-like proof that can be independently verified.
     """
     service = get_blockchain_service(db)
     proof = await service.get_verification_proof(request_id)
-    
+
     return proof
 
 
@@ -146,12 +142,12 @@ async def get_registration_stats(
 ):
     """
     Get statistics about blockchain registrations.
-    
+
     Admin only endpoint.
     """
     service = get_blockchain_service(db)
     stats = await service.get_registration_stats()
-    
+
     return stats
 
 
@@ -162,20 +158,17 @@ async def create_genesis_block(
 ):
     """
     Create a genesis block for the audit blockchain.
-    
+
     Admin only endpoint - initializes the blockchain with a known starting point.
     """
     service = get_blockchain_service(db)
     block_number = await service.create_genesis_block()
-    
+
     if block_number:
         return {
             "success": True,
             "block_number": block_number,
-            "message": "Genesis block created successfully"
+            "message": "Genesis block created successfully",
         }
     else:
-        return {
-            "success": False,
-            "message": "Failed to create genesis block"
-        }
+        return {"success": False, "message": "Failed to create genesis block"}

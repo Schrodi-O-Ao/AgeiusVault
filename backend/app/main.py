@@ -1,12 +1,22 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, users, audit, requests, delegations, encrypted_requests, anomaly, blockchain
-from app.websockets import audit_stream
+
 from app.config import settings
-from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_size import RequestSizeMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.user_rate_limit import UserRateLimitMiddleware
+from app.routers import (
+    anomaly,
+    audit,
+    auth,
+    blockchain,
+    delegations,
+    encrypted_requests,
+    requests,
+    users,
+)
+from app.websockets import audit_stream
 
 app = FastAPI(title="AegisVault API")
 
@@ -31,11 +41,17 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(requests.router, prefix="/api/v1/requests", tags=["requests"])
-app.include_router(encrypted_requests.router, prefix="/api/v1/encrypted", tags=["encrypted_requests"])
-app.include_router(delegations.router, prefix="/api/v1/delegations", tags=["delegations"])
+app.include_router(
+    encrypted_requests.router, prefix="/api/v1/encrypted", tags=["encrypted_requests"]
+)
+app.include_router(
+    delegations.router, prefix="/api/v1/delegations", tags=["delegations"]
+)
 app.include_router(audit.router, prefix="/api/v1/audit", tags=["audit"])
 app.include_router(anomaly.router, prefix="/api/v1/anomaly", tags=["anomaly_detection"])
-app.include_router(blockchain.router, prefix="/api/v1/blockchain", tags=["blockchain_audit"])
+app.include_router(
+    blockchain.router, prefix="/api/v1/blockchain", tags=["blockchain_audit"]
+)
 
 # WebSocket endpoint for real-time audit streaming
 app.websocket("/api/v1/audit/stream/{request_id}")(audit_stream.audit_stream_websocket)

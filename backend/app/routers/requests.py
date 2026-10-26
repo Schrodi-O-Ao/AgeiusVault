@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user, get_ip_hmac, get_user_agent
 from app.models.user import User
 from app.schemas.request import BulkApprovalCreate, RequestAction, RequestCreate
 from app.security.jwt_handler import JWTHandler
-from app.config import settings
 from app.services.request_service import RequestService
 
 router = APIRouter()
@@ -29,8 +29,8 @@ def _get_step_up_payload(request: Request) -> dict:
         raise HTTPException(403, "X-Step-Up-Token header is required")
     try:
         return jwt_handler.decode(token)
-    except Exception:
-        raise HTTPException(403, "Invalid or expired step-up token")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(403, "Invalid or expired step-up token") from exc
 
 
 @router.post("")

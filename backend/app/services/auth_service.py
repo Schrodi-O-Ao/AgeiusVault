@@ -1,40 +1,50 @@
-import os
-import uuid
-import hashlib
-import json
-import secrets
 import base64
+import hashlib
 import io
-from datetime import datetime, timedelta, timezone
+import json
+import logging
+import os
+import secrets
+import uuid
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+logger = logging.getLogger(__name__)
+
+
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
-from app.models.session import Session
+from app.config import settings
 from app.models.email_otp import EmailOTP, TOTPPending
-from app.models.totp_backup_code import TOTPBackupCode
 from app.models.password_reset_token import PasswordResetToken
-from app.security.hmac_impl import hmac_sha256
-from app.security.pbkdf2 import PBKDF2
+from app.models.session import Session
+from app.models.totp_backup_code import TOTPBackupCode
+from app.models.user import User
 from app.security.aes import AESCBC
+from app.security.crypto_utils import (
+    constant_time_compare,
+    decode_iv_ct,
+    encode_iv_ct,
+    secure_random_hex,
+)
+from app.security.hmac_impl import hmac_sha256
+from app.security.jwt_handler import JWTHandler
+from app.security.pbkdf2 import PBKDF2
 from app.security.rsa_impl import RSAImpl
 from app.security.totp import TOTP, generate_backup_codes
-from app.security.jwt_handler import JWTHandler
-from app.security.crypto_utils import encode_iv_ct, decode_iv_ct, secure_random_hex, constant_time_compare
 from app.services.email_service import EmailService
-from app.config import settings
-from app.utils.validation import InputValidator, ValidationError
+from app.utils.validation import InputValidator
 
 
 class AuthService:
     """Handles all the authentication-related business logic.
-    
+
     This is where we handle user registration, login, password resets,
     TOTP setup, and all that security-related stuff. The crypto operations
     happen here, but the actual crypto implementations are in the security folder.
     """
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.jwt_handler = JWTHandler(settings.JWT_SECRET)
@@ -46,7 +56,7 @@ class AuthService:
         self, full_name: str, email: str, password: str, ip_hmac: str, user_agent: str
     ):
         """Register a new user account.
-        
+
         This does several security things:
         1. Validates and normalizes input
         2. Hashes the password with PBKDF2 (so we never store the actual password)
@@ -60,8 +70,10 @@ class AuthService:
         validated_password = InputValidator.validate_password(password)
 
         existing = (
-            await self.db.execute(select(User).where(User.email == email_lower))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.email == email_lower)))
+            .scalars()
+            .first()
+        )
         if existing:
             raise HTTPException(400, "An account with this email already exists")
 
@@ -69,9 +81,20 @@ class AuthService:
         key_salt = os.urandom(32)
 
         # Hash the password - we store the hash, not the password itself
-        password_hash = PBKDF2(password.encode(), password_salt, settings.PBKDF2_ITERATIONS, 32).derive().hex()
+        password_hash = (
+            PBKDF2(
+                validated_password.encode(),
+                password_salt,
+                settings.PBKDF2_ITERATIONS,
+                32,
+            )
+            .derive()
+            .hex()
+        )
         # Derive a vault key from the password for encrypting the RSA private key
-        vault_key = PBKDF2(password.encode(), key_salt, settings.PBKDF2_OTP_ITERATIONS, 32).derive()
+        vault_key = PBKDF2(
+            validated_password.encode(), key_salt, settings.PBKDF2_OTP_ITERATIONS, 32
+        ).derive()
 
         # Generate RSA keypair for digital signatures
         public_key, private_key = RSAImpl.generate_keypair(settings.RSA_KEY_SIZE)
@@ -93,13 +116,23 @@ class AuthService:
 
         # OTP for email verification; single commit
         otp = f"{secrets.randbelow(1_000_000):06d}"
-        otp_hash = PBKDF2(otp.encode(), str(new_user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32).derive().hex()
+        otp_hash = (
+            PBKDF2(
+                otp.encode(),
+                str(new_user.id).encode(),
+                settings.PBKDF2_OTP_ITERATIONS,
+                32,
+            )
+            .derive()
+            .hex()
+        )
         self.db.add(
             EmailOTP(
                 user_id=new_user.id,
                 otp_hash=otp_hash,
                 purpose="verify",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_OTP_EXPIRE_HOURS),
+                expires_at=datetime.now(UTC)
+                + timedelta(hours=settings.EMAIL_OTP_EXPIRE_HOURS),
             )
         )
         await self.db.commit()
@@ -118,17 +151,21 @@ class AuthService:
 
     # ── User Login (step 1: email + password) ───────────────────────────
 
-    async def login_step1(self, email: str, password: str, ip_hmac: str, user_agent: str):
+    async def login_step1(
+        self, email: str, password: str, ip_hmac: str, user_agent: str
+    ):
         """First step of login - verify email and password.
-        
+
         If the password is correct and TOTP is enabled, we return a partial token
         that gets used in step 2 with the TOTP code. If TOTP isn't enabled,
         we go straight to issuing the full session token.
         """
         email_lower = email.strip().lower()
         user = (
-            await self.db.execute(select(User).where(User.email == email_lower))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.email == email_lower)))
+            .scalars()
+            .first()
+        )
 
         # We always do the password hash computation to prevent timing attacks
         # (even if the user doesn't exist, we still compute a hash)
@@ -136,21 +173,25 @@ class AuthService:
         target_hash = bytes.fromhex(user.password_hash) if user else os.urandom(32)
         salt_to_use = bytes.fromhex(user.password_salt) if user else dummy_salt
 
-        computed_hash = PBKDF2(password.encode(), salt_to_use, settings.PBKDF2_ITERATIONS, 32).derive()
+        computed_hash = PBKDF2(
+            password.encode(), salt_to_use, settings.PBKDF2_ITERATIONS, 32
+        ).derive()
         is_valid = constant_time_compare(computed_hash, target_hash) if user else False
 
         if not user or not is_valid:
             if user:
                 user.failed_attempts += 1
                 if user.failed_attempts >= settings.MAX_FAILED_LOGIN_ATTEMPTS:
-                    user.locked_until = datetime.now(timezone.utc) + timedelta(hours=settings.ACCOUNT_LOCKOUT_HOURS)
+                    user.locked_until = datetime.now(UTC) + timedelta(
+                        hours=settings.ACCOUNT_LOCKOUT_HOURS
+                    )
                 await self.db.commit()
             raise HTTPException(401, "Invalid credentials")
 
         if user.locked_until and user.locked_until.tzinfo is None:
-            user.locked_until = user.locked_until.replace(tzinfo=timezone.utc)
+            user.locked_until = user.locked_until.replace(tzinfo=UTC)
 
-        if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+        if user.locked_until and user.locked_until > datetime.now(UTC):
             raise HTTPException(401, "Account locked. Try again later.")
 
         if not user.email_verified:
@@ -163,13 +204,15 @@ class AuthService:
             pending = TOTPPending(
                 user_id=user.id,
                 token_jti=jti,
-                expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.PARTIAL_TOKEN_EXPIRE_SECONDS),
+                expires_at=datetime.now(UTC)
+                + timedelta(seconds=settings.PARTIAL_TOKEN_EXPIRE_SECONDS),
             )
             self.db.add(pending)
             await self.db.commit()
 
             partial_token = self.jwt_handler.encode(
-                {"sub": str(user.id), "jti": jti, "type": "partial"}, settings.PARTIAL_TOKEN_EXPIRE_SECONDS
+                {"sub": str(user.id), "jti": jti, "type": "partial"},
+                settings.PARTIAL_TOKEN_EXPIRE_SECONDS,
             )
             return {"totp_required": True, "partial_token": partial_token}
 
@@ -177,25 +220,38 @@ class AuthService:
 
     # ── Login step 2 (TOTP verification) ──────────────────────────
 
-    async def login_step2(self, partial_token: str, code: str, vault_key: bytes, ip_hmac: str, user_agent: str):
+    async def login_step2(
+        self,
+        partial_token: str,
+        code: str,
+        vault_key: bytes,
+        ip_hmac: str,
+        user_agent: str,
+    ):
         try:
             payload = self.jwt_handler.decode(partial_token)
             if payload.get("type") != "partial":
                 raise ValueError()
-        except Exception:
-            raise HTTPException(401, "Invalid token")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(401, "Invalid token") from exc
 
         pending = (
-            await self.db.execute(
-                select(TOTPPending).where(TOTPPending.token_jti == payload["jti"])
+            (
+                await self.db.execute(
+                    select(TOTPPending).where(TOTPPending.token_jti == payload["jti"])
+                )
             )
-        ).scalars().first()
-        if not pending or pending.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            .scalars()
+            .first()
+        )
+        if not pending or pending.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
             raise HTTPException(401, "Token expired")
 
         user = (
-            await self.db.execute(select(User).where(User.id == pending.user_id))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.id == pending.user_id)))
+            .scalars()
+            .first()
+        )
 
         secret = self._decrypt_totp_secret(user, vault_key)
         # First try the standard TOTP verification
@@ -204,15 +260,21 @@ class AuthService:
             return await self._generate_session(user, ip_hmac, user_agent)
 
         # If TOTP failed, check one-time backup codes stored hashed in DB
-        computed = PBKDF2(code.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32).derive()
+        computed = PBKDF2(
+            code.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32
+        ).derive()
         backup_record = (
-            await self.db.execute(
-                select(TOTPBackupCode).where(
-                    TOTPBackupCode.user_id == user.id,
-                    TOTPBackupCode.used.is_(False),
+            (
+                await self.db.execute(
+                    select(TOTPBackupCode).where(
+                        TOTPBackupCode.user_id == user.id,
+                        TOTPBackupCode.used.is_(False),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         matched = None
         for br in backup_record:
@@ -220,7 +282,8 @@ class AuthService:
                 if constant_time_compare(bytes.fromhex(br.code_hash), computed):
                     matched = br
                     break
-            except Exception:
+            except (ValueError, TypeError) as exc:
+                logger.debug("Backup code comparison error: %s", exc)
                 continue
 
         if matched:
@@ -234,9 +297,11 @@ class AuthService:
 
     # ── Backup code verification for login (standalone) ──────────────────────────
 
-    async def verify_backup_code_login(self, partial_token: str, backup_code: str, ip_hmac: str, user_agent: str):
+    async def verify_backup_code_login(
+        self, partial_token: str, backup_code: str, ip_hmac: str, user_agent: str
+    ):
         """Verify a backup code during login as an alternative to TOTP.
-        
+
         This allows users to log in if they lose their authenticator device
         by using one of their pre-generated backup codes.
         """
@@ -244,31 +309,46 @@ class AuthService:
             payload = self.jwt_handler.decode(partial_token)
             if payload.get("type") != "partial":
                 raise ValueError()
-        except Exception:
-            raise HTTPException(401, "Invalid token")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(401, "Invalid token") from exc
 
         pending = (
-            await self.db.execute(
-                select(TOTPPending).where(TOTPPending.token_jti == payload["jti"])
+            (
+                await self.db.execute(
+                    select(TOTPPending).where(TOTPPending.token_jti == payload["jti"])
+                )
             )
-        ).scalars().first()
-        if not pending or pending.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            .scalars()
+            .first()
+        )
+        if not pending or pending.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
             raise HTTPException(401, "Token expired")
 
         user = (
-            await self.db.execute(select(User).where(User.id == pending.user_id))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.id == pending.user_id)))
+            .scalars()
+            .first()
+        )
 
         # Hash the provided backup code and compare with stored hashes
-        computed = PBKDF2(backup_code.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32).derive()
+        computed = PBKDF2(
+            backup_code.encode(),
+            str(user.id).encode(),
+            settings.PBKDF2_OTP_ITERATIONS,
+            32,
+        ).derive()
         backup_record = (
-            await self.db.execute(
-                select(TOTPBackupCode).where(
-                    TOTPBackupCode.user_id == user.id,
-                    TOTPBackupCode.used.is_(False),
+            (
+                await self.db.execute(
+                    select(TOTPBackupCode).where(
+                        TOTPBackupCode.user_id == user.id,
+                        TOTPBackupCode.used.is_(False),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         matched = None
         for br in backup_record:
@@ -276,7 +356,8 @@ class AuthService:
                 if constant_time_compare(bytes.fromhex(br.code_hash), computed):
                     matched = br
                     break
-            except Exception:
+            except (ValueError, TypeError) as exc:
+                logger.debug("Backup code comparison error: %s", exc)
                 continue
 
         if matched:
@@ -293,8 +374,10 @@ class AuthService:
     async def verify_email(self, email: str, code: str, ip_hmac: str, user_agent: str):
         email_lower = email.strip().lower()
         user = (
-            await self.db.execute(select(User).where(User.email == email_lower))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.email == email_lower)))
+            .scalars()
+            .first()
+        )
         if not user:
             raise HTTPException(404, "User not found")
 
@@ -302,30 +385,44 @@ class AuthService:
             return {"success": True, "message": "Email already verified"}
 
         otp_record = (
-            await self.db.execute(
-                select(EmailOTP).where(
-                    EmailOTP.user_id == user.id,
-                    EmailOTP.purpose == "verify",
-                    EmailOTP.used_at.is_(None),
+            (
+                await self.db.execute(
+                    select(EmailOTP).where(
+                        EmailOTP.user_id == user.id,
+                        EmailOTP.purpose == "verify",
+                        EmailOTP.used_at.is_(None),
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
         if not otp_record:
-            raise HTTPException(400, "No verification code found. Please request a new one.")
+            raise HTTPException(
+                400, "No verification code found. Please request a new one."
+            )
 
-        if otp_record.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+        if otp_record.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
             raise HTTPException(400, "Verification code expired")
 
-        otp_hash = PBKDF2(code.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32).derive().hex()
-        if not constant_time_compare(bytes.fromhex(otp_hash), bytes.fromhex(otp_record.otp_hash)):
+        otp_hash = (
+            PBKDF2(
+                code.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32
+            )
+            .derive()
+            .hex()
+        )
+        if not constant_time_compare(
+            bytes.fromhex(otp_hash), bytes.fromhex(otp_record.otp_hash)
+        ):
             otp_record.attempts += 1
             if otp_record.attempts >= settings.MAX_OTP_ATTEMPTS:
                 await self.db.delete(otp_record)
             await self.db.commit()
             raise HTTPException(400, "Invalid verification code")
 
-        otp_record.used_at = datetime.now(timezone.utc)
+        otp_record.used_at = datetime.now(UTC)
         user.email_verified = True
         await self.db.commit()
 
@@ -336,37 +433,56 @@ class AuthService:
     async def resend_verification_otp(self, email: str):
         email_lower = email.strip().lower()
         user = (
-            await self.db.execute(select(User).where(User.email == email_lower))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.email == email_lower)))
+            .scalars()
+            .first()
+        )
         if not user:
             # Don't reveal whether the email exists
-            return {"success": True, "message": "If the account exists, a new code has been sent."}
+            return {
+                "success": True,
+                "message": "If the account exists, a new code has been sent.",
+            }
 
         if user.email_verified:
-            return {"success": True, "message": "Email is already verified. You can log in."}
+            return {
+                "success": True,
+                "message": "Email is already verified. You can log in.",
+            }
 
         # Invalidate any existing unused OTPs
         old_otps = (
-            await self.db.execute(
-                select(EmailOTP).where(
-                    EmailOTP.user_id == user.id,
-                    EmailOTP.purpose == "verify",
-                    EmailOTP.used_at.is_(None),
+            (
+                await self.db.execute(
+                    select(EmailOTP).where(
+                        EmailOTP.user_id == user.id,
+                        EmailOTP.purpose == "verify",
+                        EmailOTP.used_at.is_(None),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for old in old_otps:
             await self.db.delete(old)
 
         # Generate new OTP
         otp = f"{secrets.randbelow(1_000_000):06d}"
-        otp_hash = PBKDF2(otp.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32).derive().hex()
+        otp_hash = (
+            PBKDF2(
+                otp.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32
+            )
+            .derive()
+            .hex()
+        )
         self.db.add(
             EmailOTP(
                 user_id=user.id,
                 otp_hash=otp_hash,
                 purpose="verify",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_OTP_EXPIRE_HOURS),
+                expires_at=datetime.now(UTC)
+                + timedelta(hours=settings.EMAIL_OTP_EXPIRE_HOURS),
             )
         )
         await self.db.commit()
@@ -377,15 +493,20 @@ class AuthService:
             f"Your AegisVault verification code is {otp}. It expires in 24 hours.",
         )
 
-        return {"success": True, "message": "If the account exists, a new code has been sent."}
+        return {
+            "success": True,
+            "message": "If the account exists, a new code has been sent.",
+        }
 
     # Password reset: request
 
     async def request_password_reset(self, email: str, ip_hmac: str, user_agent: str):
         email_lower = email.strip().lower()
         user = (
-            await self.db.execute(select(User).where(User.email == email_lower))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.email == email_lower)))
+            .scalars()
+            .first()
+        )
 
         if user:
             raw_token = secrets.token_urlsafe(32)
@@ -398,7 +519,8 @@ class AuthService:
                 PasswordResetToken(
                     user_id=user.id,
                     token_hash=token_hash,
-                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES),
+                    expires_at=datetime.now(UTC)
+                    + timedelta(minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES),
                 )
             )
             await self.db.commit()
@@ -409,7 +531,10 @@ class AuthService:
                 f"Your password reset token is: {raw_token}\n\nIt expires in 15 minutes.",
             )
 
-        return {"success": True, "message": "If the email exists, a reset link has been sent"}
+        return {
+            "success": True,
+            "message": "If the email exists, a reset link has been sent",
+        }
 
     # Password reset: complete
 
@@ -417,41 +542,60 @@ class AuthService:
         self, token: str, new_password: str, ip_hmac: str, user_agent: str
     ):
         validated_password = InputValidator.validate_password(new_password)
-        
+
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         reset = (
-            await self.db.execute(
-                select(PasswordResetToken).where(
-                    PasswordResetToken.token_hash == token_hash,
-                    PasswordResetToken.used.is_(False),
+            (
+                await self.db.execute(
+                    select(PasswordResetToken).where(
+                        PasswordResetToken.token_hash == token_hash,
+                        PasswordResetToken.used.is_(False),
+                    )
                 )
             )
-        ).scalars().first()
-        if not reset or reset.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            .scalars()
+            .first()
+        )
+        if not reset or reset.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
             raise HTTPException(400, "Invalid or expired reset token")
 
         user = (
-            await self.db.execute(select(User).where(User.id == reset.user_id))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.id == reset.user_id)))
+            .scalars()
+            .first()
+        )
         if not user:
             raise HTTPException(400, "Invalid reset token")
 
         # Only update password; preserve existing RSA keys
         password_salt = os.urandom(32)
-        user.password_hash = PBKDF2(validated_password.encode(), password_salt, settings.PBKDF2_ITERATIONS, 32).derive().hex()
+        user.password_hash = (
+            PBKDF2(
+                validated_password.encode(),
+                password_salt,
+                settings.PBKDF2_ITERATIONS,
+                32,
+            )
+            .derive()
+            .hex()
+        )
         user.password_salt = password_salt.hex()
 
         reset.used = True
 
         # Invalidate all other reset tokens for this user
         all_tokens = (
-            await self.db.execute(
-                select(PasswordResetToken).where(
-                    PasswordResetToken.user_id == user.id,
-                    PasswordResetToken.used.is_(False),
+            (
+                await self.db.execute(
+                    select(PasswordResetToken).where(
+                        PasswordResetToken.user_id == user.id,
+                        PasswordResetToken.used.is_(False),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for t in all_tokens:
             t.used = True
 
@@ -475,7 +619,9 @@ class AuthService:
         image = qrcode.make(uri)
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
-        qr_data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+        qr_data_url = "data:image/png;base64," + base64.b64encode(
+            buffer.getvalue()
+        ).decode("ascii")
         return {
             "success": True,
             "secret": totp.secret_base32,
@@ -483,7 +629,9 @@ class AuthService:
             "qr_code_data_url": qr_data_url,
         }
 
-    async def enable_totp(self, user: User, code: str, vault_key: bytes, ip_hmac: str, user_agent: str):
+    async def enable_totp(
+        self, user: User, code: str, vault_key: bytes, ip_hmac: str, user_agent: str
+    ):
         if not user.totp_secret_enc:
             raise HTTPException(400, "TOTP setup has not been started")
         secret = self._decrypt_totp_secret(user, vault_key)
@@ -493,15 +641,35 @@ class AuthService:
         # Persist one-time backup codes and return plaintext list for the user to store
         codes = generate_backup_codes()
         for c in codes:
-            code_hash = PBKDF2(c.encode(), str(user.id).encode(), settings.PBKDF2_OTP_ITERATIONS, 32).derive().hex()
+            code_hash = (
+                PBKDF2(
+                    c.encode(),
+                    str(user.id).encode(),
+                    settings.PBKDF2_OTP_ITERATIONS,
+                    32,
+                )
+                .derive()
+                .hex()
+            )
             self.db.add(TOTPBackupCode(user_id=user.id, code_hash=code_hash))
         await self.db.commit()
-        return {"success": True, "message": "TOTP enabled successfully", "backup_codes": codes}
+        return {
+            "success": True,
+            "message": "TOTP enabled successfully",
+            "backup_codes": codes,
+        }
 
     # ── Step-up token ─────────────────────────────────────────────
 
     async def issue_step_up_token(
-        self, user: User, request_id: str, action_type: str, code: str, vault_key: bytes, ip_hmac: str, user_agent: str
+        self,
+        user: User,
+        request_id: str,
+        action_type: str,
+        code: str,
+        vault_key: bytes,
+        ip_hmac: str,
+        user_agent: str,
     ):
         if not user.totp_enabled:
             raise HTTPException(403, "TOTP must be enabled for step-up verification")
@@ -525,40 +693,55 @@ class AuthService:
 
     async def refresh_session(self, refresh_token: str, ip_hmac: str, user_agent: str):
         refresh_hmac = hmac_sha256(self.server_key, refresh_token.encode()).hexdigest()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         session = (
-            await self.db.execute(
-                select(Session).where(
-                    Session.refresh_token_hmac == refresh_hmac,
-                    Session.revoked_at.is_(None),
-                    Session.expires_at >= now,
+            (
+                await self.db.execute(
+                    select(Session).where(
+                        Session.refresh_token_hmac == refresh_hmac,
+                        Session.revoked_at.is_(None),
+                        Session.expires_at >= now,
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if not session:
             raise HTTPException(401, "Invalid refresh token")
         user = (
-            await self.db.execute(select(User).where(User.id == session.user_id))
-        ).scalars().first()
+            (await self.db.execute(select(User).where(User.id == session.user_id)))
+            .scalars()
+            .first()
+        )
         if not user:
             raise HTTPException(401, "User not found")
         session.last_active_at = now
         access_token = self.jwt_handler.encode(
-            {"sub": str(user.id), "sid": str(session.id), "type": "access"}, settings.ACCESS_TOKEN_EXPIRE_SECONDS
+            {"sub": str(user.id), "sid": str(session.id), "type": "access"},
+            settings.ACCESS_TOKEN_EXPIRE_SECONDS,
         )
         await self.db.commit()
         return {"success": True, "access_token": access_token}
 
-    async def logout_session(self, user: User, session_id: str | None, ip_hmac: str, user_agent: str):
+    async def logout_session(
+        self, user: User, session_id: str | None, ip_hmac: str, user_agent: str
+    ):
         if not session_id:
             return {"success": True}
         session = (
-            await self.db.execute(
-                select(Session).where(Session.id == uuid.UUID(session_id), Session.user_id == user.id)
+            (
+                await self.db.execute(
+                    select(Session).where(
+                        Session.id == uuid.UUID(session_id), Session.user_id == user.id
+                    )
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if session and not session.revoked_at:
-            session.revoked_at = datetime.now(timezone.utc)
+            session.revoked_at = datetime.now(UTC)
             await self.db.commit()
         return {"success": True}
 
@@ -568,7 +751,8 @@ class AuthService:
         refresh_token = secure_random_hex(32)
         session_id = uuid.uuid4()
         access_token = self.jwt_handler.encode(
-            {"sub": str(user.id), "sid": str(session_id), "type": "access"}, settings.ACCESS_TOKEN_EXPIRE_SECONDS
+            {"sub": str(user.id), "sid": str(session_id), "type": "access"},
+            settings.ACCESS_TOKEN_EXPIRE_SECONDS,
         )
         refresh_hmac = hmac_sha256(self.server_key, refresh_token.encode()).hexdigest()
 
@@ -576,13 +760,14 @@ class AuthService:
             id=session_id,
             user_id=user.id,
             refresh_token_hmac=refresh_hmac,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+            expires_at=datetime.now(UTC)
+            + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             device_label=user_agent[:50] if user_agent else "Unknown",
             ip_country="XX",
-            last_active_at=datetime.now(timezone.utc),
+            last_active_at=datetime.now(UTC),
         )
         self.db.add(session)
-        user.last_login_at = datetime.now(timezone.utc)
+        user.last_login_at = datetime.now(UTC)
         await self.db.commit()
 
         return {

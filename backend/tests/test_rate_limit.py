@@ -8,7 +8,9 @@ def test_rate_limit_blocks_after_threshold():
     app = FastAPI()
 
     # Use a small threshold for fast tests
-    app.add_middleware(RateLimitMiddleware, max_requests=5, window_seconds=60, block_seconds=60)
+    app.add_middleware(
+        RateLimitMiddleware, max_requests=5, window_seconds=60, block_seconds=60
+    )
 
     @app.get("/ping")
     def ping():

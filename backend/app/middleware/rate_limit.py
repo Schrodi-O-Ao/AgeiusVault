@@ -5,10 +5,11 @@ clients that exceed the configured request rate for a window. It's suitable
 for local development and tests; for production use a distributed store
 (Redis) or API gateway rate-limiting is recommended.
 """
+
 from __future__ import annotations
 
-import time
 import threading
+import time
 from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -19,7 +20,13 @@ from app.config import settings
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app: Any, max_requests: int | None = None, window_seconds: int | None = None, block_seconds: int | None = None):
+    def __init__(
+        self,
+        app: Any,
+        max_requests: int | None = None,
+        window_seconds: int | None = None,
+        block_seconds: int | None = None,
+    ):
         super().__init__(app)
         self.max_requests = max_requests or settings.RATE_LIMIT_REQUESTS_PER_WINDOW
         self.window_seconds = window_seconds or settings.RATE_LIMIT_WINDOW_SECONDS
@@ -34,7 +41,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if xff:
             ip = xff.split(",")[0].strip()
         else:
-            ip = (request.client.host if request.client else "unknown")
+            ip = request.client.host if request.client else "unknown"
 
         now = time.time()
         with self.lock:
@@ -43,7 +50,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # If currently blocked, return 429 with Retry-After
                 if rec.get("blocked_until", 0) > now:
                     retry_after = int(rec["blocked_until"] - now)
-                    return JSONResponse({"detail": "Too many requests"}, status_code=429, headers={"Retry-After": str(retry_after)})
+                    return JSONResponse(
+                        {"detail": "Too many requests"},
+                        status_code=429,
+                        headers={"Retry-After": str(retry_after)},
+                    )
 
                 # Reset window if expired
                 if now - rec["window_start"] >= self.window_seconds:
@@ -53,7 +64,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     rec["count"] += 1
                     if rec["count"] > self.max_requests:
                         rec["blocked_until"] = now + self.block_seconds
-                        return JSONResponse({"detail": "Too many requests"}, status_code=429, headers={"Retry-After": str(self.block_seconds)})
+                        return JSONResponse(
+                            {"detail": "Too many requests"},
+                            status_code=429,
+                            headers={"Retry-After": str(self.block_seconds)},
+                        )
             else:
                 # First request for this IP
                 self.clients[ip] = {"count": 1, "window_start": now, "blocked_until": 0}

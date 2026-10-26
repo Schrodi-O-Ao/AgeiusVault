@@ -1,16 +1,18 @@
 """Accept encrypted request payloads and store their ciphertext and routing metadata."""
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import Any, Dict
+
 import json
 import re
 import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models.user import User
 from app.models.request import Request
+from app.models.user import User
 from app.security.crypto_utils import encode_iv_ct
 from app.services.audit_service import AuditService
 from app.utils.validation import InputValidator, ValidationError
@@ -20,18 +22,30 @@ router = APIRouter()
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
 
-def _validate_envelope(encrypted_data: Dict[str, Any]) -> None:
+def _validate_envelope(encrypted_data: dict[str, Any]) -> None:
     """Reject malformed browser encryption fields before storing them."""
     required_fields = (
-        "encryptedPayload", "iv", "keyHash", "requestType", "isAnonymous", "wrappedKeys"
+        "encryptedPayload",
+        "iv",
+        "keyHash",
+        "requestType",
+        "isAnonymous",
+        "wrappedKeys",
     )
     for field in required_fields:
         if field not in encrypted_data:
             raise HTTPException(400, f"Missing required field: {field}")
 
     payload = encrypted_data["encryptedPayload"]
-    if not isinstance(payload, str) or len(payload) < 32 or len(payload) % 2 or not _HEX_RE.fullmatch(payload):
-        raise HTTPException(400, "encryptedPayload must be even-length hexadecimal AES-GCM ciphertext")
+    if (
+        not isinstance(payload, str)
+        or len(payload) < 32
+        or len(payload) % 2
+        or not _HEX_RE.fullmatch(payload)
+    ):
+        raise HTTPException(
+            400, "encryptedPayload must be even-length hexadecimal AES-GCM ciphertext"
+        )
 
     iv = encrypted_data["iv"]
     if not isinstance(iv, str) or not re.fullmatch(r"[0-9a-fA-F]{24}", iv):
@@ -51,17 +65,25 @@ def _validate_envelope(encrypted_data: Dict[str, Any]) -> None:
     if not isinstance(wrapped_keys, list) or not wrapped_keys:
         raise HTTPException(400, "wrappedKeys must be a non-empty list")
     for item in wrapped_keys:
-        if not isinstance(item, dict) or not isinstance(item.get("userId"), str) or not item["userId"]:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("userId"), str)
+            or not item["userId"]
+        ):
             raise HTTPException(400, "Each wrapped key must include a userId")
         wrapped_key = item.get("wrappedKey")
         # The browser currently wraps a 256-bit AES key with RSA-3072, producing 384 bytes.
-        if not isinstance(wrapped_key, str) or not re.fullmatch(r"[0-9a-fA-F]{768}", wrapped_key):
-            raise HTTPException(400, "Each wrappedKey must be a 384-byte hexadecimal RSA-3072 value")
+        if not isinstance(wrapped_key, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{768}", wrapped_key
+        ):
+            raise HTTPException(
+                400, "Each wrappedKey must be a 384-byte hexadecimal RSA-3072 value"
+            )
 
 
 @router.post("/encrypted")
 async def submit_encrypted_request(
-    encrypted_data: Dict[str, Any],
+    encrypted_data: dict[str, Any],
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -70,10 +92,14 @@ async def submit_encrypted_request(
         _validate_envelope(encrypted_data)
 
         # Validate request type
-        request_type = InputValidator.validate_request_type(encrypted_data["requestType"])
+        request_type = InputValidator.validate_request_type(
+            encrypted_data["requestType"]
+        )
 
         # Resolve approver to wrap their key
-        approver = await _resolve_approver(user, request_type, encrypted_data["isAnonymous"], db)
+        approver = await _resolve_approver(
+            user, request_type, encrypted_data["isAnonymous"], db
+        )
 
         if not approver:
             raise HTTPException(400, "No approver available for this request type")
@@ -82,10 +108,12 @@ async def submit_encrypted_request(
         wrapped_keys = []
         for key_entry in encrypted_data["wrappedKeys"]:
             if key_entry.get("userId") == str(approver.id):
-                wrapped_keys.append({
-                    "user_id": str(approver.id),
-                    "wrapped_key": key_entry.get("wrappedKey")
-                })
+                wrapped_keys.append(
+                    {
+                        "user_id": str(approver.id),
+                        "wrapped_key": key_entry.get("wrappedKey"),
+                    }
+                )
 
         if not wrapped_keys:
             raise HTTPException(400, "No wrapped key provided for the approver")
@@ -97,16 +125,20 @@ async def submit_encrypted_request(
             type=request_type,
             payload_enc=encode_iv_ct(
                 bytes.fromhex(encrypted_data["iv"]),
-                bytes.fromhex(encrypted_data["encryptedPayload"])
+                bytes.fromhex(encrypted_data["encryptedPayload"]),
             ),
             dek_enc=wrapped_keys,
             status="PENDING",
             is_anonymous=encrypted_data["isAnonymous"],
-            identity_enc=json.dumps({
-                "keyHash": encrypted_data["keyHash"],
-                "clientEncryption": True,
-                "encryptionVersion": "1.0"
-            }).encode().hex(),
+            identity_enc=json.dumps(
+                {
+                    "keyHash": encrypted_data["keyHash"],
+                    "clientEncryption": True,
+                    "encryptionVersion": "1.0",
+                }
+            )
+            .encode()
+            .hex(),
         )
 
         db.add(request_obj)
@@ -114,11 +146,7 @@ async def submit_encrypted_request(
 
         # Log the submission in audit chain
         audit = AuditService(db)
-        await audit.log(
-            request_obj.id,
-            user.id,
-            "SUBMITTED_ENCRYPTED"
-        )
+        await audit.log(request_obj.id, user.id, "SUBMITTED_ENCRYPTED")
         await db.commit()
 
         return {
@@ -126,15 +154,15 @@ async def submit_encrypted_request(
             "id": str(request_obj.id),
             "type": request_type,
             "status": "PENDING",
-            "encrypted": True
+            "encrypted": True,
         }
 
     except HTTPException:
         raise
     except ValidationError as e:
         raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Failed to process encrypted request: {str(e)}")
+    except (ValueError, KeyError, TypeError, RuntimeError) as e:
+        raise HTTPException(500, f"Failed to process encrypted request: {e!s}")
 
 
 @router.get("/approvers/{request_type}")
@@ -170,7 +198,7 @@ async def get_approver_public_keys(
                 {
                     "userId": str(approver.id),
                     "publicKey": public_key_data.get("pem", approver.rsa_public_key),
-                    "format": public_key_data.get("format", "PEM")
+                    "format": public_key_data.get("format", "PEM"),
                 }
             ]
         }
@@ -179,8 +207,8 @@ async def get_approver_public_keys(
         raise
     except ValidationError as e:
         raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Failed to retrieve approver keys: {str(e)}")
+    except (ValueError, KeyError, TypeError, RuntimeError) as e:
+        raise HTTPException(500, f"Failed to retrieve approver keys: {e!s}")
 
 
 @router.get("/{request_id}/encrypted")
@@ -199,7 +227,7 @@ async def get_encrypted_request(
 
         # Find the wrapped key for this user
         wrapped_key = None
-        for key_entry in (request_obj.dek_enc or []):
+        for key_entry in request_obj.dek_enc or []:
             if key_entry.get("user_id") == str(user.id):
                 wrapped_key = key_entry.get("wrapped_key")
                 break
@@ -216,16 +244,18 @@ async def get_encrypted_request(
             "wrappedKey": wrapped_key,
             "isAnonymous": request_obj.is_anonymous,
             "submittedAt": str(request_obj.submitted_at),
-            "status": request_obj.status
+            "status": request_obj.status,
         }
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(500, f"Failed to retrieve encrypted request: {str(e)}")
+    except (ValueError, KeyError, TypeError, RuntimeError) as e:
+        raise HTTPException(500, f"Failed to retrieve encrypted request: {e!s}")
 
 
-async def _resolve_approver(user: User, request_type: str, is_anonymous: bool, db: AsyncSession) -> User | None:
+async def _resolve_approver(
+    user: User, request_type: str, is_anonymous: bool, db: AsyncSession
+) -> User | None:
     """Choose HR for anonymous requests, otherwise prefer the requester's manager and then an active manager."""
     if is_anonymous or request_type == "ANON_HR":
         return await _first_user_by_role("HR_ADMIN", user.id, db)
@@ -236,7 +266,9 @@ async def _resolve_approver(user: User, request_type: str, is_anonymous: bool, d
     return await _first_user_by_role("MANAGER", user.id, db)
 
 
-async def _first_user_by_role(role: str, exclude_user_id = None, db: AsyncSession = None) -> User | None:
+async def _first_user_by_role(
+    role: str, exclude_user_id=None, db: AsyncSession = None
+) -> User | None:
     """Return the earliest active user with this role, excluding the requester when specified."""
     if not db:
         return None
@@ -276,6 +308,5 @@ async def _can_approve(request_obj: Request, user: User) -> bool:
     if request_obj.requester_id and request_obj.requester_id == user.id:
         return False
     return any(
-        entry.get("user_id") == str(user.id)
-        for entry in (request_obj.dek_enc or [])
+        entry.get("user_id") == str(user.id) for entry in (request_obj.dek_enc or [])
     )

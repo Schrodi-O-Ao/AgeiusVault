@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.security.chain_hash import GENESIS_HASH, compute_hash, verify_chain
@@ -14,7 +14,7 @@ def make_row(previous_hash: str):
         "ip_hmac": "abc",
         "user_agent": "pytest",
         "meta_json": None,
-        "created_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(UTC),
         "previous_hash": previous_hash,
     }
     row["current_hash"] = compute_hash(**row)

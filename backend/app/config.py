@@ -1,10 +1,8 @@
 import os
 import re
-from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 SECRET_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -12,13 +10,19 @@ SECRET_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 def _validate_hex_secret(name: str, value: str) -> str:
     value = value.strip()
     placeholder_patterns = [
-        "replace_with", "your_", "placeholder", "change_me", 
-        "secret_here", "token_here", "password_here", "example"
+        "replace_with",
+        "your_",
+        "placeholder",
+        "change_me",
+        "secret_here",
+        "token_here",
+        "password_here",
+        "example",
     ]
     if any(pattern in value.lower() for pattern in placeholder_patterns):
         raise ValueError(
             f"{name} must be a real secret, not a placeholder. "
-            f"Generate it with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            f'Generate it with: python -c "import secrets; print(secrets.token_hex(32))"'
         )
     if not SECRET_PATTERN.fullmatch(value):
         raise ValueError(
@@ -62,7 +66,7 @@ class Settings(BaseSettings):
     RSA_KEY_SIZE: int = 3072  # NIST recommendation for long-term security
     # Request size limits
     MAX_REQUEST_SIZE_BYTES: int = 10 * 1024 * 1024  # 10MB
-    
+
     SMTP_HOST: str = "localhost"
     SMTP_PORT: int = 1025
     SMTP_USER: str = ""
@@ -94,8 +98,13 @@ class Settings(BaseSettings):
         if not value:
             return value
         placeholder_patterns = [
-            "your_", "placeholder", "change_me", "password_here", 
-            "app_password_here", "example", "secret"
+            "your_",
+            "placeholder",
+            "change_me",
+            "password_here",
+            "app_password_here",
+            "example",
+            "secret",
         ]
         if any(pattern in value.lower() for pattern in placeholder_patterns):
             raise ValueError(
@@ -110,8 +119,13 @@ class Settings(BaseSettings):
     @classmethod
     def validate_database_url(cls, value: str) -> str:
         placeholder_patterns = [
-            "change_me", "dev_password", "password_here", "example",
-            "your_", "placeholder", "secret"
+            "change_me",
+            "dev_password",
+            "password_here",
+            "example",
+            "your_",
+            "placeholder",
+            "secret",
         ]
         if any(pattern in value.lower() for pattern in placeholder_patterns):
             raise ValueError(
@@ -129,7 +143,9 @@ class Settings(BaseSettings):
         return bytes.fromhex(self.JWT_SECRET)
 
     model_config = SettingsConfigDict(
-        env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"),
+        env_file=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"
+        ),
         extra="ignore",
     )
 

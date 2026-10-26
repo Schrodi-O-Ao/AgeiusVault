@@ -46,7 +46,9 @@ def users():
 
 
 @pytest.mark.asyncio
-async def test_encrypted_submission_and_approver_decryption_contract(monkeypatch, fake_db, users):
+async def test_encrypted_submission_and_approver_decryption_contract(
+    monkeypatch, fake_db, users
+):
     requester, approver = users
     aes_key = AESGCM.generate_key(bit_length=256)
     iv = bytes.fromhex("00112233445566778899aabb")
@@ -55,7 +57,11 @@ async def test_encrypted_submission_and_approver_decryption_contract(monkeypatch
     rsa_private = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     wrapped_key = rsa_private.public_key().encrypt(
         aes_key,
-        padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
     )
     body = {
         "encryptedPayload": ciphertext.hex(),
@@ -68,7 +74,9 @@ async def test_encrypted_submission_and_approver_decryption_contract(monkeypatch
 
     monkeypatch.setattr(encrypted_requests, "Request", StoredRequest)
     monkeypatch.setattr(encrypted_requests, "AuditService", AuditStub)
-    monkeypatch.setattr(encrypted_requests, "_resolve_approver", AsyncMock(return_value=approver))
+    monkeypatch.setattr(
+        encrypted_requests, "_resolve_approver", AsyncMock(return_value=approver)
+    )
 
     async def override_db():
         yield fake_db
@@ -76,7 +84,9 @@ async def test_encrypted_submission_and_approver_decryption_contract(monkeypatch
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = lambda: requester
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             submitted = await client.post("/api/v1/encrypted/encrypted", json=body)
             assert submitted.status_code == 200
             request = fake_db.add.call_args.args[0]
@@ -85,7 +95,9 @@ async def test_encrypted_submission_and_approver_decryption_contract(monkeypatch
             assert request.identity_enc is not None
 
             app.dependency_overrides[get_current_user] = lambda: approver
-            monkeypatch.setattr(encrypted_requests, "_get_request", AsyncMock(return_value=request))
+            monkeypatch.setattr(
+                encrypted_requests, "_get_request", AsyncMock(return_value=request)
+            )
             retrieved = await client.get(f"/api/v1/encrypted/{request.id}/encrypted")
 
         assert retrieved.status_code == 200
@@ -96,11 +108,20 @@ async def test_encrypted_submission_and_approver_decryption_contract(monkeypatch
 
         recovered_key = rsa_private.decrypt(
             bytes.fromhex(envelope["wrappedKey"]),
-            padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None,
+            ),
         )
-        assert AESGCM(recovered_key).decrypt(
-            bytes.fromhex(envelope["iv"]), bytes.fromhex(envelope["encryptedData"]), None
-        ) == plaintext
+        assert (
+            AESGCM(recovered_key).decrypt(
+                bytes.fromhex(envelope["iv"]),
+                bytes.fromhex(envelope["encryptedData"]),
+                None,
+            )
+            == plaintext
+        )
         fake_db.commit.assert_awaited_once()
     finally:
         app.dependency_overrides.clear()
@@ -118,7 +139,9 @@ async def test_encrypted_submission_and_approver_decryption_contract(monkeypatch
         {"wrappedKeys": [{"userId": "someone", "wrappedKey": "abcd"}]},
     ],
 )
-async def test_invalid_envelope_is_rejected_before_database_write(change, fake_db, users):
+async def test_invalid_envelope_is_rejected_before_database_write(
+    change, fake_db, users
+):
     requester, _approver = users
     body = {
         "encryptedPayload": "00" * 32,
@@ -136,7 +159,9 @@ async def test_invalid_envelope_is_rejected_before_database_write(change, fake_d
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = lambda: requester
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.post("/api/v1/encrypted/encrypted", json=body)
         assert response.status_code == 400
         fake_db.add.assert_not_called()
@@ -145,24 +170,38 @@ async def test_invalid_envelope_is_rejected_before_database_write(change, fake_d
 
 
 @pytest.mark.asyncio
-async def test_requester_and_users_without_wrapped_key_cannot_retrieve_envelope(monkeypatch, fake_db, users):
+async def test_requester_and_users_without_wrapped_key_cannot_retrieve_envelope(
+    monkeypatch, fake_db, users
+):
     requester, approver = users
     request = StoredRequest(
-        id=uuid.uuid4(), requester_id=requester.id, type="ANNUAL_LEAVE",
+        id=uuid.uuid4(),
+        requester_id=requester.id,
+        type="ANNUAL_LEAVE",
         payload_enc="00" * 12 + ":" + "00" * 16,
         dek_enc=[{"user_id": str(approver.id), "wrapped_key": "ab" * 384}],
-        is_anonymous=False, status="PENDING",
+        is_anonymous=False,
+        status="PENDING",
     )
-    monkeypatch.setattr(encrypted_requests, "_get_request", AsyncMock(return_value=request))
+    monkeypatch.setattr(
+        encrypted_requests, "_get_request", AsyncMock(return_value=request)
+    )
 
     async def override_db():
         yield fake_db
 
     app.dependency_overrides[get_db] = override_db
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            for current_user in (requester, SimpleNamespace(id=uuid.uuid4(), role="STAFF")):
-                app.dependency_overrides[get_current_user] = lambda user=current_user: user
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for current_user in (
+                requester,
+                SimpleNamespace(id=uuid.uuid4(), role="STAFF"),
+            ):
+                app.dependency_overrides[get_current_user] = (
+                    lambda user=current_user: user
+                )
                 response = await client.get(f"/api/v1/encrypted/{request.id}/encrypted")
                 assert response.status_code == 403
     finally:

@@ -1,13 +1,12 @@
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_chain import AuditChain
-
 
 GENESIS_HASH = "0" * 64
 
@@ -36,17 +35,21 @@ class AuditService:
         """Append an entry to the audit chain for a given request."""
         # Get the last entry for this request to compute chain
         last = (
-            await self.db.execute(
-                select(AuditChain)
-                .where(AuditChain.request_id == request_id)
-                .order_by(AuditChain.step_index.desc())
-                .limit(1)
+            (
+                await self.db.execute(
+                    select(AuditChain)
+                    .where(AuditChain.request_id == request_id)
+                    .order_by(AuditChain.step_index.desc())
+                    .limit(1)
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
         step_index = (last.step_index + 1) if last else 0
         prev_hash = last.chain_hash if last else GENESIS_HASH
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         chain_hash = _compute_chain_hash(
             prev_hash=prev_hash,
@@ -88,12 +91,14 @@ class AuditService:
         for entry in chain:
             # Check previous hash link
             if entry.prev_hash != expected_prev:
-                violations.append({
-                    "entry_id": str(entry.id),
-                    "type": "gap_or_deletion",
-                    "expected_prev": expected_prev,
-                    "stored_prev": entry.prev_hash,
-                })
+                violations.append(
+                    {
+                        "entry_id": str(entry.id),
+                        "type": "gap_or_deletion",
+                        "expected_prev": expected_prev,
+                        "stored_prev": entry.prev_hash,
+                    }
+                )
 
             # Recompute and verify current hash
             expected_hash = _compute_chain_hash(
@@ -104,12 +109,14 @@ class AuditService:
                 timestamp=entry.recorded_at.isoformat(),
             )
             if entry.chain_hash != expected_hash:
-                violations.append({
-                    "entry_id": str(entry.id),
-                    "type": "row_modified",
-                    "expected_hash": expected_hash,
-                    "stored_hash": entry.chain_hash,
-                })
+                violations.append(
+                    {
+                        "entry_id": str(entry.id),
+                        "type": "row_modified",
+                        "expected_hash": expected_hash,
+                        "stored_hash": entry.chain_hash,
+                    }
+                )
 
             expected_prev = entry.chain_hash
 

@@ -1,7 +1,7 @@
 import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
@@ -16,12 +16,10 @@ from app.models.request import Request
 from app.models.user import User
 from app.security.aes import AESCBC
 from app.security.crypto_utils import decode_iv_ct, encode_iv_ct, secure_random_hex
-from app.security.hmac_impl import hmac_sha256
 from app.security.rsa_impl import RSAImpl
 from app.security.totp import TOTP
 from app.services.audit_service import AuditService
-from app.utils.validation import InputValidator, ValidationError
-
+from app.utils.validation import InputValidator
 
 # Payload schemas per request type
 REQUEST_TYPE_FIELDS = {
@@ -54,7 +52,9 @@ class RequestService:
     ) -> dict[str, Any]:
         # Validate request type and payload
         validated_type = InputValidator.validate_request_type(request_type)
-        validated_payload = InputValidator.validate_request_payload(validated_type, payload)
+        validated_payload = InputValidator.validate_request_payload(
+            validated_type, payload
+        )
 
         if validated_type == "ANON_HR":
             is_anonymous = True
@@ -92,7 +92,9 @@ class RequestService:
         identity_enc = None
         if is_anonymous:
             identity_data = json.dumps({"user_id": str(user.id), "email": user.email})
-            id_iv, id_ct = AESCBC(self.server_key).encrypt(identity_data.encode("utf-8"))
+            id_iv, id_ct = AESCBC(self.server_key).encrypt(
+                identity_data.encode("utf-8")
+            )
             identity_enc = encode_iv_ct(id_iv, id_ct)
 
         request = Request(
@@ -158,12 +160,16 @@ class RequestService:
 
         # Get approvals
         approvals = (
-            await self.db.execute(
-                select(Approval)
-                .where(Approval.request_id == request.id)
-                .order_by(Approval.acted_at.asc())
+            (
+                await self.db.execute(
+                    select(Approval)
+                    .where(Approval.request_id == request.id)
+                    .order_by(Approval.acted_at.asc())
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # Get nonce for potential actions
         nonce = await self.issue_nonce(request.id, user.id)
@@ -230,11 +236,11 @@ class RequestService:
         try:
             iv, ct = decode_iv_ct(user.rsa_private_enc)
             private_key = RSAImpl.decrypt_private_key(iv, ct, vault_key)
-        except Exception:
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             raise HTTPException(400, "Invalid vault key")
 
         # Create digital signature
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         step_nonce = secure_random_hex(16)
         message = f"{request_id}|{action}|{now.isoformat()}|{step_nonce}".encode()
         signature = RSAImpl.sign_message(private_key, message)
@@ -287,7 +293,10 @@ class RequestService:
         user_agent: str | None,
     ) -> dict[str, Any]:
         if len(request_ids) > settings.MAX_BULK_APPROVAL_REQUESTS:
-            raise HTTPException(400, f"Bulk approval is limited to {settings.MAX_BULK_APPROVAL_REQUESTS} requests")
+            raise HTTPException(
+                400,
+                f"Bulk approval is limited to {settings.MAX_BULK_APPROVAL_REQUESTS} requests",
+            )
 
         await self._verify_totp(user, totp_code, vault_key)
 
@@ -305,7 +314,7 @@ class RequestService:
                 # Sign and create approval
                 iv, ct = decode_iv_ct(user.rsa_private_enc)
                 private_key = RSAImpl.decrypt_private_key(iv, ct, vault_key)
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 step_nonce = secure_random_hex(16)
                 message = f"{raw_id}|APPROVED|{now.isoformat()}|{step_nonce}".encode()
                 signature = RSAImpl.sign_message(private_key, message)
@@ -337,8 +346,10 @@ class RequestService:
 
     async def dashboard_stats(self, user: User) -> dict[str, Any]:
         all_pending = (
-            await self.db.execute(select(Request).where(Request.status == "PENDING"))
-        ).scalars().all()
+            (await self.db.execute(select(Request).where(Request.status == "PENDING")))
+            .scalars()
+            .all()
+        )
 
         inbox_count = 0
         for req in all_pending:
@@ -346,10 +357,14 @@ class RequestService:
                 inbox_count += 1
 
         my_requests = (
-            await self.db.execute(
-                select(Request).where(Request.requester_id == user.id)
+            (
+                await self.db.execute(
+                    select(Request).where(Request.requester_id == user.id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         approved_count = len([r for r in my_requests if r.status == "APPROVED"])
 
@@ -370,7 +385,8 @@ class RequestService:
                 user_id=user_id,
                 action_type="any",
                 nonce=nonce,
-                expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.ACTION_NONCE_EXPIRE_MINUTES),
+                expires_at=datetime.now(UTC)
+                + timedelta(minutes=settings.ACTION_NONCE_EXPIRE_MINUTES),
             )
         )
         await self.db.flush()
@@ -410,7 +426,9 @@ class RequestService:
             "role": role,
         }
 
-    async def _resolve_approver(self, user: User, request_type: str, is_anonymous: bool) -> User | None:
+    async def _resolve_approver(
+        self, user: User, request_type: str, is_anonymous: bool
+    ) -> User | None:
         if is_anonymous or request_type == "ANON_HR":
             return await self._first_user_by_role("HR_ADMIN")
         if user.manager_id:
@@ -431,23 +449,26 @@ class RequestService:
         if request.is_anonymous and user.role == "HR_ADMIN":
             return True
         # Check if user has a wrapped key as approver (server-side encryption)
-        for key_entry in (request.dek_enc or []):
-            if key_entry.get("user_id") == str(user.id) and key_entry.get("role") in ("approver", "delegate"):
+        for key_entry in request.dek_enc or []:
+            if key_entry.get("user_id") == str(user.id) and key_entry.get("role") in (
+                "approver",
+                "delegate",
+            ):
                 return True
         # Check if user has a wrapped key for client-side encrypted requests
-        for key_entry in (request.dek_enc or []):
+        for key_entry in request.dek_enc or []:
             if key_entry.get("user_id") == str(user.id) and "role" not in key_entry:
                 return True
         # Check delegations
         delegates = await self._active_delegates_of(user.id)
         for del_user_id in delegates:
-            for key_entry in (request.dek_enc or []):
+            for key_entry in request.dek_enc or []:
                 if key_entry.get("user_id") == str(del_user_id):
                     return True
         return False
 
     async def _active_delegates(self, delegator_id: uuid.UUID) -> list[User]:
-        now = datetime.now(timezone.utc).date()
+        now = datetime.now(UTC).date()
         result = await self.db.execute(
             select(Delegation).where(
                 Delegation.delegator_id == delegator_id,
@@ -465,7 +486,7 @@ class RequestService:
 
     async def _active_delegates_of(self, delegate_id: uuid.UUID) -> list[uuid.UUID]:
         """Get delegator IDs for whom this user is a delegate."""
-        now = datetime.now(timezone.utc).date()
+        now = datetime.now(UTC).date()
         result = await self.db.execute(
             select(Delegation).where(
                 Delegation.delegatee_id == delegate_id,
@@ -476,9 +497,11 @@ class RequestService:
         )
         return [d.delegator_id for d in result.scalars().all()]
 
-    async def _decrypt_dek(self, request: Request, user: User, vault_key: bytes) -> bytes:
+    async def _decrypt_dek(
+        self, request: Request, user: User, vault_key: bytes
+    ) -> bytes:
         wrapped = None
-        for entry in (request.dek_enc or []):
+        for entry in request.dek_enc or []:
             if entry.get("user_id") == str(user.id):
                 wrapped = entry
                 break
@@ -488,24 +511,30 @@ class RequestService:
             iv, ct = decode_iv_ct(user.rsa_private_enc)
             private_key = RSAImpl.decrypt_private_key(iv, ct, vault_key)
             return RSAImpl.decrypt_symmetric_key(wrapped["wrapped_dek"], private_key)
-        except Exception:
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             raise HTTPException(400, "Invalid vault key")
 
-    async def _consume_nonce(self, request_id: uuid.UUID, user_id: uuid.UUID, nonce: str) -> None:
-        now = datetime.now(timezone.utc)
+    async def _consume_nonce(
+        self, request_id: uuid.UUID, user_id: uuid.UUID, nonce: str
+    ) -> None:
+        now = datetime.now(UTC)
         item = (
-            await self.db.execute(
-                select(ActionNonce)
-                .where(
-                    ActionNonce.request_id == request_id,
-                    ActionNonce.user_id == user_id,
-                    ActionNonce.nonce == nonce,
-                    ActionNonce.used_at.is_(None),
-                    ActionNonce.expires_at >= now,
+            (
+                await self.db.execute(
+                    select(ActionNonce)
+                    .where(
+                        ActionNonce.request_id == request_id,
+                        ActionNonce.user_id == user_id,
+                        ActionNonce.nonce == nonce,
+                        ActionNonce.used_at.is_(None),
+                        ActionNonce.expires_at >= now,
+                    )
+                    .with_for_update()
                 )
-                .with_for_update()
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if not item:
             raise HTTPException(400, "Action nonce is invalid or expired")
         item.used_at = now
@@ -524,8 +553,10 @@ class RequestService:
         except ValueError:
             raise HTTPException(404, "Request not found")
         request = (
-            await self.db.execute(select(Request).where(Request.id == parsed))
-        ).scalars().first()
+            (await self.db.execute(select(Request).where(Request.id == parsed)))
+            .scalars()
+            .first()
+        )
         if not request:
             raise HTTPException(404, "Request not found")
         return request
@@ -533,14 +564,24 @@ class RequestService:
     async def _get_user(self, user_id) -> User | None:
         if not user_id:
             return None
-        return (await self.db.execute(select(User).where(User.id == user_id))).scalars().first()
+        return (
+            (await self.db.execute(select(User).where(User.id == user_id)))
+            .scalars()
+            .first()
+        )
 
     async def _first_user_by_role(self, role: str) -> User | None:
         return (
-            await self.db.execute(
-                select(User).where(User.role == role, User.is_active.is_(True)).order_by(User.created_at.asc())
+            (
+                await self.db.execute(
+                    select(User)
+                    .where(User.role == role, User.is_active.is_(True))
+                    .order_by(User.created_at.asc())
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
     def _request_summary(self, request: Request) -> dict[str, Any]:
         return {
@@ -563,7 +604,9 @@ class RequestService:
             metadata = json.loads(request.identity_enc)
         except (TypeError, json.JSONDecodeError):
             try:
-                metadata = json.loads(bytes.fromhex(request.identity_enc).decode("utf-8"))
+                metadata = json.loads(
+                    bytes.fromhex(request.identity_enc).decode("utf-8")
+                )
             except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
                 return False
         return isinstance(metadata, dict) and metadata.get("clientEncryption") is True

@@ -1,9 +1,12 @@
-import aiosmtplib
 import logging
 from email.message import EmailMessage
+
+import aiosmtplib
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
 
 class EmailService:
     @staticmethod
@@ -13,13 +16,15 @@ class EmailService:
         message["To"] = to_email
         message["Subject"] = subject
         message.set_content(body)
-        
+
         # Check if settings.SMTP_PASSWORD is empty or not configured
         if not settings.SMTP_PASSWORD:
-            logger.warning(f"SMTP not configured (no password). Would send email to: {to_email}")
+            logger.warning(
+                f"SMTP not configured (no password). Would send email to: {to_email}"
+            )
             # Don't log email content even in debug mode for security
             return
-            
+
         try:
             await aiosmtplib.send(
                 message,
@@ -27,7 +32,7 @@ class EmailService:
                 port=settings.SMTP_PORT,
                 username=settings.SMTP_USER,
                 password=settings.SMTP_PASSWORD,
-                use_tls=True
+                use_tls=True,
             )
             logger.info(f"Email sent successfully to {to_email}")
         except Exception as e:
