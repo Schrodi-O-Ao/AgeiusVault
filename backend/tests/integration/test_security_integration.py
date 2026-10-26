@@ -15,6 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.config import settings
 from app.database import Base, get_db
@@ -32,17 +33,6 @@ elif "/aegisvault" in settings.DATABASE_URL:
 else:
     TEST_DATABASE_URL = settings.DATABASE_URL
 
-# Create test engine
-test_engine = create_async_engine(
-    TEST_DATABASE_URL,
-    echo=False,
-    pool_pre_ping=True,
-)
-TestSessionLocal = sessionmaker(
-    test_engine, class_=AsyncSession, expire_on_commit=False
-)
-
-
 _db_available: bool | None = None
 
 
@@ -53,22 +43,32 @@ async def test_db():
     if _db_available is False:
         pytest.skip("Test database not available")
 
+    engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        poolclass=NullPool,
+    )
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
     try:
-        async with test_engine.begin() as conn:
+        async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         _db_available = True
-    except (SQLAlchemyError, OSError) as e:
+    except (SQLAlchemyError, OSError, RuntimeError) as e:
         _db_available = False
+        await engine.dispose()
         pytest.skip(f"Test database not available: {e}")
 
-    async with TestSessionLocal() as session:
+    async with session_factory() as session:
         yield session
 
     try:
-        async with test_engine.begin() as conn:
+        async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
-    except (SQLAlchemyError, OSError) as exc:
+    except (SQLAlchemyError, OSError, RuntimeError) as exc:
         logger.debug("Failed to drop test database tables: %s", exc)
+    finally:
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -240,10 +240,11 @@ class TestSecurityIntegration:
     @pytest.mark.asyncio
     async def test_rate_limiting(self, client):
         """Test that rate limiting is enforced."""
-        # Make multiple rapid requests
+        # Make multiple rapid requests with a dedicated test IP
         responses = []
+        headers = {"X-Forwarded-For": "198.51.100.99"}
         for _ in range(settings.RATE_LIMIT_REQUESTS_PER_WINDOW + 10):
-            response = await client.get("/health")
+            response = await client.get("/health", headers=headers)
             responses.append(response)
 
         # Should eventually be rate limited
