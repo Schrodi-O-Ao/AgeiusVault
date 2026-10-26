@@ -8,6 +8,7 @@ in an integrated environment with the full application stack.
 # Resolve test database URL safely
 import logging
 import os
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -80,10 +81,14 @@ async def client(test_db):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        yield ac
+    with patch(
+        "app.services.email_service.EmailService.send_email",
+        new_callable=AsyncMock,
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            yield ac
 
     app.dependency_overrides.clear()
 
@@ -233,7 +238,13 @@ class TestSecurityIntegration:
             with pytest.raises(ValidationError):
                 InputValidator.validate_request_type(invalid_type)
 
-        for valid_type in ["READ", "WRITE", "DELETE", "ADMIN"]:
+        for valid_type in [
+            "ANNUAL_LEAVE",
+            "SICK_LEAVE",
+            "EXPENSE",
+            "IT_ACCESS",
+            "ANON_HR",
+        ]:
             result = InputValidator.validate_request_type(valid_type)
             assert result == valid_type
 
