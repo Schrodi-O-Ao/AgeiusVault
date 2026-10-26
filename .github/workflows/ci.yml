@@ -32,9 +32,8 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aegisvault_test
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aegisvault_test
-      JWT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      AES_MASTER_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      HMAC_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      SERVER_MASTER_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      JWT_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       WEB3_STORAGE_TOKEN: test_web3_token_for_ci
       SMTP_PASSWORD: test_smtp_password
     
