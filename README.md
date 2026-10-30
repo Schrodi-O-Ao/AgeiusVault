@@ -41,7 +41,15 @@ No production security audit, external blockchain verification result, or deploy
 
 ## Quick Start
 
-### Docker Compose
+### Production / Container Registry Deployment
+
+To run AegisVault with pre-built production images published by GitHub Actions to GitHub Container Registry (no local compile or toolchain needed):
+
+```powershell
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Local Docker Compose Build
 
 Set valid local values in `.env` for the database password and application secrets, then start the services:
 

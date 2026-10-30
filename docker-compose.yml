@@ -7,7 +7,7 @@ services:
     container_name: aegisvault_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aegisvault_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegisvault_dev_password_CHANGE_ME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-7b9e38d61f5c4902a7e4b2d86c0e5a91}
       POSTGRES_DB: ${POSTGRES_DB:-aegisvault}
     ports:
       - "5433:5432"
@@ -28,7 +28,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aegisvault_user}:${POSTGRES_PASSWORD:-aegisvault_dev_password_CHANGE_ME}@db:5432/${POSTGRES_DB:-aegisvault}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aegisvault_user}:${POSTGRES_PASSWORD:-7b9e38d61f5c4902a7e4b2d86c0e5a91}@db:5432/${POSTGRES_DB:-aegisvault}
       SERVER_MASTER_KEY: ${SERVER_MASTER_KEY:-dd73ad8b28ef633aa5bf79cea84ded3d2acbe7387acc09752e3e94aa18972698}
       JWT_SECRET: ${JWT_SECRET:-c23f9006ab4d2ec23af796b4126aaf190ce0ae6a8a52ffa0bad8b47c28169960}
       CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
@@ -41,11 +41,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
     container_name: aegisvault_frontend
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
     depends_on:
       - backend
     restart: unless-stopped

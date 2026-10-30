@@ -1,0 +1,46 @@
+# Production deployment configuration using pre-built images from GitHub Container Registry
+# Run with: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: aegisvault_prod_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aegisvault_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-7b9e38d61f5c4902a7e4b2d86c0e5a91}
+      POSTGRES_DB: ${POSTGRES_DB:-aegisvault}
+    volumes:
+      - aegisvault_prod_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegisvault_user -d aegisvault"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: always
+
+  backend:
+    image: ghcr.io/${IMAGE_OWNER:-schrodi-o-ao}/aegisvault-backend:${IMAGE_TAG:-latest}
+    container_name: aegisvault_prod_backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aegisvault_user}:${POSTGRES_PASSWORD:-7b9e38d61f5c4902a7e4b2d86c0e5a91}@db:5432/${POSTGRES_DB:-aegisvault}
+      SERVER_MASTER_KEY: ${SERVER_MASTER_KEY:-dd73ad8b28ef633aa5bf79cea84ded3d2acbe7387acc09752e3e94aa18972698}
+      JWT_SECRET: ${JWT_SECRET:-c23f9006ab4d2ec23af796b4126aaf190ce0ae6a8a52ffa0bad8b47c28169960}
+      CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  frontend:
+    image: ghcr.io/${IMAGE_OWNER:-schrodi-o-ao}/aegisvault-frontend:${IMAGE_TAG:-latest}
+    container_name: aegisvault_prod_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  aegisvault_prod_postgres_data:
