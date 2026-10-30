@@ -8,7 +8,7 @@ export const api = axios.create({
 let getAccessToken = () => '';
 let getVaultKey = () => '';
 let getRefreshToken = () => '';
-let onTokenRefreshed = (_token: string) => {};
+let onTokenRefreshed: (token: string) => void = () => {};
 
 export const injectStores = (
   accessFn: () => string,

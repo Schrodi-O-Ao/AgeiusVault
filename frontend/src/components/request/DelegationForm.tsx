@@ -5,7 +5,7 @@ import { KeyRound, Send } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { RequestTypeInfo, TeamMember } from '@/types';
 
-export function DelegationForm({ team, requestTypes, onCreated }: { team: TeamMember[]; requestTypes: RequestTypeInfo[]; onCreated: () => void }) {
+export function DelegationForm({ team, onCreated }: { team: TeamMember[]; requestTypes?: RequestTypeInfo[]; onCreated: () => void }) {
   const [delegateeId, setDelegateeId] = useState(team[0]?.id ?? '');
   const [validFrom, setValidFrom] = useState(() => new Date().toISOString().slice(0, 10));
   const [validUntil, setValidUntil] = useState(() => new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10));

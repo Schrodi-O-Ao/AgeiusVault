@@ -8,7 +8,8 @@ import { deriveVaultKeyHex } from '@/lib/crypto';
 import { useAuthStore } from '@/store/authStore';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { LockKeyhole, LogIn, ShieldCheck, Eye, EyeOff } from 'lucide-react';
+import Image from 'next/image';
+import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
 
 type LoginForm = z.infer<typeof loginSchema>;
@@ -54,7 +55,7 @@ export default function Login() {
       <div className="mx-auto grid min-h-[calc(100vh-5rem)] w-full max-w-5xl items-center gap-8 lg:grid-cols-[1fr_420px]">
         <section className="hidden lg:block">
           <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-lg border border-emerald-400/30 bg-emerald-400/10">
-            <img src="/aegisvault-logo.svg" alt="AegisVault" className="h-6 w-6" />
+            <Image src="/aegisvault-logo.svg" alt="AegisVault" width={24} height={24} className="h-6 w-6" />
           </div>
           <h1 className="text-4xl font-semibold">AegisVault</h1>
           <p className="mt-2 text-lg font-medium text-emerald-300">Internal Civil Service HR &amp; Leave System</p>
@@ -66,7 +67,7 @@ export default function Login() {
         <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-xl shadow-black/20">
           <div className="mb-6 flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-400 text-zinc-950">
-              <img src="/aegisvault-logo.svg" alt="AegisVault" className="h-5 w-5" />
+              <Image src="/aegisvault-logo.svg" alt="AegisVault" width={20} height={20} className="h-5 w-5" />
             </div>
             <div>
               <h2 className="text-2xl font-semibold">Sign In</h2>

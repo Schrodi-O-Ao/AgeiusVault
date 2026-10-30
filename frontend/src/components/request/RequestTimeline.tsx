@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Circle } from 'lucide-react';
 import type { ApprovalEntry } from '@/types';
 
 function formatDate(value: string) {

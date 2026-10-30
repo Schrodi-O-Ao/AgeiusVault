@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { FilePlus2, GitBranch, Inbox, LayoutDashboard, LogOut, Menu, Send, Settings, ShieldAlert, ShieldCheck } from 'lucide-react';
+import Image from 'next/image';
+import { FilePlus2, GitBranch, Inbox, LayoutDashboard, LogOut, Menu, Send, Settings, ShieldAlert } from 'lucide-react';
 
 export default function VaultLayout({ children }: { children: React.ReactNode }) {
   const { user, vaultKey, clearAuth } = useAuthStore();
@@ -30,7 +31,7 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
     <aside className="flex h-full w-72 flex-col border-r border-zinc-800 bg-zinc-950">
       <div className="flex h-16 items-center gap-3 border-b border-zinc-800 px-5">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-400 text-zinc-950">
-          <img src="/aegisvault-logo.svg" alt="AegisVault" className="h-5 w-5" />
+          <Image src="/aegisvault-logo.svg" alt="AegisVault" width={20} height={20} className="h-5 w-5" />
         </div>
         <span className="text-lg font-semibold">AegisVault</span>
       </div>
@@ -74,7 +75,7 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
       <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-4 lg:hidden">
         <button onClick={() => setIsMenuOpen(true)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-800 text-zinc-300" aria-label="Open navigation"><Menu className="h-5 w-5" /></button>
         <div className="flex items-center gap-2 font-semibold">
-          <img src="/aegisvault-logo.svg" alt="AegisVault" className="h-5 w-5 text-emerald-300" />
+          <Image src="/aegisvault-logo.svg" alt="AegisVault" width={20} height={20} className="h-5 w-5" />
           AegisVault
         </div>
         <button onClick={handleLogout} className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-800 text-zinc-300" aria-label="Sign out"><LogOut className="h-5 w-5" /></button>

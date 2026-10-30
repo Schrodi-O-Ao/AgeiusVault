@@ -1,7 +1,7 @@
 "use client";
 import { FormEvent, useEffect, useState } from 'react';
 import Image from 'next/image';
-import { Clock, KeyRound, Laptop, QrCode, ShieldCheck, Trash2, UserRound } from 'lucide-react';
+import { Clock, Laptop, QrCode, ShieldCheck, Trash2, UserRound } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import type { SessionInfo } from '@/types';
