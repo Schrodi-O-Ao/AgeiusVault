@@ -48,6 +48,28 @@ class UserRateLimitMiddleware(BaseHTTPMiddleware):
         self.users: dict[str, dict] = {}
         # Track users who have hit limits for monitoring
         self.violations: dict[str, list[float]] = defaultdict(list)
+        self._last_cleanup = time.time()
+
+    def _cleanup_stale(self, now: float) -> None:
+        """Evict expired user rate limit tracking entries to avoid unbounded growth."""
+        if (now - self._last_cleanup >= self.window_seconds) or (
+            len(self.users) > 5000 and now - self._last_cleanup >= 10
+        ):
+            self._last_cleanup = now
+            stale_users = [
+                u
+                for u, v in self.users.items()
+                if (now - v.get("window_start", 0) >= self.window_seconds)
+                and (v.get("blocked_until", 0) <= now)
+            ]
+            for u in stale_users:
+                del self.users[u]
+
+            cutoff = now - 86400
+            for u in list(self.violations.keys()):
+                self.violations[u] = [t for t in self.violations[u] if t >= cutoff]
+                if not self.violations[u]:
+                    del self.violations[u]
 
     async def dispatch(self, request: Request, call_next):
         # Extract user ID from request state if available (set by auth middleware)
@@ -61,6 +83,7 @@ class UserRateLimitMiddleware(BaseHTTPMiddleware):
         now = time.time()
 
         with self.lock:
+            self._cleanup_stale(now)
             user_data = self.users.get(user_id_str)
 
             if user_data:

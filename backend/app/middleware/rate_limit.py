@@ -34,17 +34,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.lock = threading.Lock()
         # clients: ip -> {count:int, window_start:float, blocked_until:float}
         self.clients: dict[str, dict] = {}
+        self._last_cleanup = time.time()
+
+    def _cleanup_stale(self, now: float) -> None:
+        """Evict expired rate limit tracking entries to avoid unbounded growth."""
+        if (now - self._last_cleanup >= self.window_seconds) or (
+            len(self.clients) > 5000 and now - self._last_cleanup >= 10
+        ):
+            self._last_cleanup = now
+            stale_keys = [
+                k
+                for k, v in self.clients.items()
+                if (now - v.get("window_start", 0) >= self.window_seconds)
+                and (v.get("blocked_until", 0) <= now)
+            ]
+            for k in stale_keys:
+                del self.clients[k]
 
     async def dispatch(self, request: Request, call_next):
-        # Respect X-Forwarded-For when present (useful in tests/proxies)
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            ip = xff.split(",")[0].strip()
-        else:
-            ip = request.client.host if request.client else "unknown"
+        # Do not trust unverified client-supplied headers (e.g. X-Forwarded-For)
+        # to prevent rate limiting bypass via IP spoofing.
+        ip = request.client.host if request.client else "unknown"
 
         now = time.time()
         with self.lock:
+            self._cleanup_stale(now)
             rec = self.clients.get(ip)
             if rec:
                 # If currently blocked, return 429 with Retry-After
