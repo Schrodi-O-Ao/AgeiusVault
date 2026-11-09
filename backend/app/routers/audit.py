@@ -1,14 +1,16 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.audit_chain import AuditChain
+from app.models.request import Request
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.services.request_service import RequestService
 
 router = APIRouter()
 
@@ -16,7 +18,7 @@ router = APIRouter()
 @router.get("/logs")
 async def list_audit_logs(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role("HR_ADMIN", "SYS_ADMIN")),
 ):
     """List recent audit chain entries across all requests."""
     result = await db.execute(
@@ -46,8 +48,29 @@ async def get_request_chain(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    try:
+        req_uuid = uuid.UUID(request_id)
+    except ValueError:
+        raise HTTPException(404, "Invalid request ID")
+
+    req = (
+        (await db.execute(select(Request).where(Request.id == req_uuid)))
+        .scalars()
+        .first()
+    )
+    if not req:
+        raise HTTPException(404, "Request not found")
+
+    service = RequestService(db)
+    if (
+        user.role not in ("HR_ADMIN", "SYS_ADMIN")
+        and req.requester_id != user.id
+        and not await service._can_approve(req, user)
+    ):
+        raise HTTPException(403, "You are not authorized to view this audit chain")
+
     audit = AuditService(db)
-    chain = await audit.get_chain(uuid.UUID(request_id))
+    chain = await audit.get_chain(req_uuid)
     return {
         "data": [
             {
@@ -70,6 +93,27 @@ async def verify_chain(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    try:
+        req_uuid = uuid.UUID(request_id)
+    except ValueError:
+        raise HTTPException(404, "Invalid request ID")
+
+    req = (
+        (await db.execute(select(Request).where(Request.id == req_uuid)))
+        .scalars()
+        .first()
+    )
+    if not req:
+        raise HTTPException(404, "Request not found")
+
+    service = RequestService(db)
+    if (
+        user.role not in ("HR_ADMIN", "SYS_ADMIN")
+        and req.requester_id != user.id
+        and not await service._can_approve(req, user)
+    ):
+        raise HTTPException(403, "You are not authorized to verify this audit chain")
+
     audit = AuditService(db)
-    result = await audit.verify_chain(uuid.UUID(request_id))
+    result = await audit.verify_chain(req_uuid)
     return result

@@ -17,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.config import settings
+from app.security.jwt_handler import JWTHandler
 
 
 class UserRateLimitMiddleware(BaseHTTPMiddleware):
@@ -43,6 +44,7 @@ class UserRateLimitMiddleware(BaseHTTPMiddleware):
         self.block_seconds = block_seconds or getattr(
             settings, "RATE_LIMIT_USER_BLOCK_SECONDS", 300
         )
+        self.jwt_handler = JWTHandler(settings.JWT_SECRET)
         self.lock = threading.Lock()
         # users: user_id -> {count:int, window_start:float, blocked_until:float}
         self.users: dict[str, dict] = {}
@@ -74,6 +76,18 @@ class UserRateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Extract user ID from request state if available (set by auth middleware)
         user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            auth_header = request.headers.get("Authorization")
+            if auth_header:
+                parts = auth_header.split()
+                if len(parts) == 2 and parts[0].lower() == "bearer":
+                    try:
+                        payload = self.jwt_handler.decode(parts[1])
+                        if payload.get("type") == "access" and "sub" in payload:
+                            user_id = payload["sub"]
+                            request.state.user_id = user_id
+                    except Exception:
+                        pass
 
         # Only rate limit authenticated users
         if not user_id:

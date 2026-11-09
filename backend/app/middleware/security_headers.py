@@ -64,8 +64,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             # Production CSP - strict security
             csp = (
                 "default-src 'self'; "
-                "script-src 'self' 'nonce-{random}'; "
-                "style-src 'self' 'nonce-{random}'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data: https:; "
                 "font-src 'self' data:; "
                 "connect-src 'self'; "
