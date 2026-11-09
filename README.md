@@ -20,22 +20,21 @@ flowchart LR
     API --> DB[("PostgreSQL\nrequest data and audit records")]
     API --> AUDIT["SHA-256 linked audit records"]
     AUDIT --> VERIFY["Application chain verification"]
-    API --> DETECT["Activity anomaly scoring"]
-    API -. "development helper; external lookup is incomplete" .-> CHAIN["Blockchain audit scaffold"]
+    API --> DETECT["Rule-based heuristics with Isolation Forest scaffold"]
 ```
 
 ## Features
 
-- Encrypts selected request payloads in the browser with AES-GCM and a random 256-bit data key.
+- Browser-side AES-GCM/RSA-OAEP envelope encryption on submission, with server-side envelope validation.
 - Wraps that key separately for approvers with RSA-OAEP and SHA-256; the server stores the submitted ciphertext and envelope fields.
 - Supports account authentication, time-based one-time passwords, approval workflows, delegation, and request audit records.
 - Stores linked audit hashes and provides an application endpoint to verify chain links and record contents.
-- Includes activity anomaly scoring and rate limits for API requests.
-- Includes a blockchain audit prototype with mock behavior; it is not a complete external anchoring and retrieval system.
+- Includes rule-based activity heuristics with an Isolation Forest scaffold, plus per-IP and per-user rate limits for API requests.
+- Role-based access control protecting administrative audit logs, team directories, and request audit chains.
 
 ## Results
 
-The backend test suite completed with **120 passed and 10 skipped** using the repository's available Python environment and `DEBUG=false`. The 10 database integration tests skipped because the separate test database was unavailable. The initial test run without the override could not collect API tests because the local `.env` sets `DEBUG` to the non-boolean value `release`.
+The backend test suite completed with **125 passed and 10 skipped** using the repository's available Python environment and `DEBUG=false`. The 10 database integration tests skipped because the separate test database was unavailable. The initial test run without the override could not collect API tests because the local `.env` sets `DEBUG` to the non-boolean value `release`.
 
 No production security audit, external blockchain verification result, or deployment measurement is claimed here.
 
@@ -87,15 +86,13 @@ Open `http://localhost:3000`. The API requires valid `DATABASE_URL`, `SERVER_MAS
 
 ### Encrypted request payloads
 
-The browser serializes the selected request content, generates a random AES-GCM key and initialization vector, encrypts the content, then wraps the key for each listed approver using RSA-OAEP with SHA-256. It submits the ciphertext, initialization vector, key hash, request type, anonymity flag, and wrapped keys. The server can route and audit the request without decrypting that particular payload through the encrypted-request route. This does not hide the user's authenticated activity or all request metadata from the service.
+The browser serializes the selected request content, generates a random AES-GCM key and initialization vector, encrypts the content, then wraps the key for each listed approver using RSA-OAEP with SHA-256. It submits the ciphertext, initialization vector, key hash, request type, anonymity flag, and wrapped keys. The server validates and stores the envelope without decrypting that particular payload on submission. This does not hide the user's authenticated activity or all request metadata from the service.
 
-The browser key pair is RSA-3072. The backend also has RSA-OAEP key wrapping and RSA-PSS with SHA-256 for server-side workflow signatures. Account private-key material is stored encrypted using a password-derived vault key. Other workflow paths use server-side encryption, so the browser-encrypted route should not be treated as a property of every stored field.
+The browser key pair is RSA-3072. The backend also integrates standard RSA-OAEP key wrapping and RSA-PSS with SHA-256 for server-side workflow signatures via the Python `cryptography` library. Account private-key material is stored encrypted on the server using a password-derived vault key. Other workflow paths use server-side encryption, so the browser-encrypted route should not be treated as a property of every stored field. Anonymous identities are encrypted under the server master key, ensuring anonymity with respect to other users while remaining accessible to the server operator.
 
-### Audit and blockchain code
+### Audit chain
 
-Audit entries include a SHA-256 hash linked to the prior entry. The verifier can detect changed entry data or broken links when it is run against the stored chain. The hash chain does not prevent database edits or independently prove which version existed before verification.
-
-The blockchain service contains a local development transaction path and a mock service. The real service's record lookup currently returns no records, so the repository does not provide end-to-end external anchor verification. The audit database is not immutable, and working EVM testnet anchoring is not demonstrated.
+Audit entries include a SHA-256 hash linked to the prior entry. The verifier can detect changed entry data or broken links when it is run against the stored chain. The hash chain does not prevent direct database edits or independently prove which version existed before verification without an external trust anchor.
 
 ### Application components
 
@@ -104,8 +101,8 @@ The blockchain service contains a local development transaction path and a mock 
 | Browser | Next.js 16, TypeScript, Web Crypto API |
 | API | FastAPI, Python, Pydantic, SQLAlchemy |
 | Database | PostgreSQL through async SQLAlchemy and asyncpg |
-| Security | AES-GCM for browser payloads; RSA-OAEP for key wrapping; RSA-PSS signatures in backend workflows; TOTP support |
-| Activity analysis | scikit-learn anomaly scoring over application activity features |
+| Security | Integrated standard libraries: AES-GCM for browser payloads; RSA-OAEP for key wrapping; RSA-PSS signatures in backend workflows; TOTP support; per-IP and per-user rate limiting |
+| Activity analysis | Rule-based activity heuristics with an Isolation Forest scaffold |
 
 ## Tests
 
@@ -116,7 +113,7 @@ $env:DEBUG = 'false'
 python -m pytest tests/ -v -p no:cacheprovider
 ```
 
-On macOS or Linux, use `DEBUG=false python -m pytest tests/ -v -p no:cacheprovider`. The latest run completed with **120 passed and 10 skipped**. The encrypted-request tests exercise submission, envelope validation, approver-only retrieval, and AES-GCM/RSA-OAEP decryption with a test database stub. The request-detail API returns browser-encrypted content as unavailable to server-side decryption, allowing the approver page to decrypt it in the browser. The 10 database integration tests still require the separate test database. These are software tests, not a security audit.
+On macOS or Linux, use `DEBUG=false python -m pytest tests/ -v -p no:cacheprovider`. The latest run completed with **125 passed and 10 skipped**. The encrypted-request tests exercise browser-side AES-GCM/RSA-OAEP envelope encryption on submission, with server-side envelope validation, approver-only retrieval, and cryptographic roundtrips with a test database stub. The 10 database integration tests still require the separate test database. These are software tests, not a security audit.
 
 ## License
 

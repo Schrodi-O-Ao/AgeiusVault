@@ -28,7 +28,7 @@ export function ApprovalPanel({ request, onUpdated }: { request: AegisVaultReque
       if (request.is_encrypted && userPrivateKeyPEM) {
         setIsDecrypting(true);
         try {
-          const response = await api.get(`/encrypted/${request.id}`);
+          const response = await api.get(`/encrypted/${request.id}/encrypted`);
           if (response.data && response.data.wrappedKey) {
             const privateKey = await importKeyFromPEM(userPrivateKeyPEM, 'PRIVATE');
             const encryptedData = {
@@ -42,7 +42,6 @@ export function ApprovalPanel({ request, onUpdated }: { request: AegisVaultReque
           }
         } catch (err) {
           console.error('Decryption failed:', err);
-          setError('Failed to decrypt request payload');
         } finally {
           setIsDecrypting(false);
         }

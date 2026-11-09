@@ -23,7 +23,9 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
     { name: 'My Requests', href: '/outbox', icon: Send },
     { name: 'Submit Request', href: '/requests/new', icon: FilePlus2 },
     { name: 'Delegations', href: '/delegations', icon: GitBranch },
-    { name: 'Audit Log', href: '/audit', icon: ShieldAlert },
+    ...(user.role === 'SYS_ADMIN' || user.role === 'HR_ADMIN'
+      ? [{ name: 'Audit Log', href: '/audit', icon: ShieldAlert }]
+      : []),
     { name: 'Settings', href: '/settings', icon: Settings },
   ];
 

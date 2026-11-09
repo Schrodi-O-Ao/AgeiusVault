@@ -40,9 +40,15 @@ export default function Dashboard() {
     async function load() {
       try {
         await Promise.all([fetchStats(), fetchList('inbox')]);
+      } catch {
+        setError('Dashboard data is unavailable.');
+      }
+      try {
         const logsRes = await api.get('/audit/logs');
         setLogs(logsRes.data.data.slice(0, 6));
-      } catch { setError('Dashboard data is unavailable.'); }
+      } catch {
+        // Audit logs are restricted to admin users
+      }
     }
     load();
   }, [fetchList, fetchStats]);
