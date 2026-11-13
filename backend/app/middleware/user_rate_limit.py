@@ -86,7 +86,7 @@ class UserRateLimitMiddleware(BaseHTTPMiddleware):
                         if payload.get("type") == "access" and "sub" in payload:
                             user_id = payload["sub"]
                             request.state.user_id = user_id
-                    except Exception:
+                    except (KeyError, ValueError):
                         pass
 
         # Only rate limit authenticated users
