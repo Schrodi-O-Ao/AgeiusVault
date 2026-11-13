@@ -221,7 +221,9 @@ class RequestService:
             raise HTTPException(403, "Step-up token is required")
         if step_up_payload.get("sub") != str(user.id):
             raise HTTPException(403, "Step-up token was issued for another user")
-        if step_up_payload.get("request_id") and step_up_payload.get("request_id") != str(request_id):
+        if step_up_payload.get("request_id") and step_up_payload.get(
+            "request_id"
+        ) != str(request_id):
             raise HTTPException(403, "Step-up token was issued for another request")
 
         request = await self._get_request(request_id)
@@ -426,7 +428,9 @@ class RequestService:
             and request.requester_id != user.id
             and not await self._can_approve(request, user)
         ):
-            raise HTTPException(403, "You are not authorized to verify this audit chain")
+            raise HTTPException(
+                403, "You are not authorized to verify this audit chain"
+            )
         audit = AuditService(self.db)
         return await audit.verify_chain(request.id)
 

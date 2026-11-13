@@ -8,7 +8,6 @@ from httpx import ASGITransport, AsyncClient
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.main import app
-
 from app.models.request import Request
 from app.services.request_service import RequestService
 

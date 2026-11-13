@@ -9,7 +9,9 @@ from app.database import Base
 class AuditChain(Base):
     __tablename__ = "audit_chain"
     __table_args__ = (
-        UniqueConstraint("request_id", "step_index", name="uq_audit_chain_request_step"),
+        UniqueConstraint(
+            "request_id", "step_index", name="uq_audit_chain_request_step"
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
