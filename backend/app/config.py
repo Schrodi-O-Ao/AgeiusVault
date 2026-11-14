@@ -3,6 +3,7 @@ import json
 import os
 import re
 from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -166,9 +167,31 @@ class Settings(BaseSettings):
             url = "postgresql+asyncpg://" + url[len("postgres://") :]
         elif url.startswith("postgresql://"):
             url = "postgresql+asyncpg://" + url[len("postgresql://") :]
-        if "sslmode=" in url:
-            url = url.replace("sslmode=", "ssl=")
-        return url
+
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        if "sslmode" in qs:
+            val = qs.pop("sslmode")[0]
+            if val in ("require", "verify-ca", "verify-full"):
+                qs["ssl"] = ["require"]
+            elif val == "disable":
+                qs.pop("ssl", None)
+
+        # Remove libpq parameters not recognized by asyncpg
+        for param in ("channel_binding", "target_session_attrs", "gssencmode"):
+            qs.pop(param, None)
+
+        new_query = urlencode(qs, doseq=True)
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                new_query,
+                parsed.fragment,
+            )
+        )
 
     @property
     def server_master_key_bytes(self) -> bytes:
