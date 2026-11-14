@@ -1,5 +1,8 @@
+import ast
+import json
 import os
 import re
+from typing import Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -72,8 +75,34 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = "noreply@aegisvault.local"
-    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    CORS_ORIGINS: list[str] | str = ["http://localhost:3000", "http://127.0.0.1:3000"]
     DEBUG: bool = False
+
+    @field_validator("CORS_ORIGINS", mode="after")
+    @classmethod
+    def assemble_cors_origins(cls, value: Any) -> list[str]:
+        if isinstance(value, str):
+            v = value.strip()
+            if not v:
+                return []
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(x) for x in parsed]
+                except (json.JSONDecodeError, ValueError):
+                    try:
+                        res = ast.literal_eval(v)
+                        if isinstance(res, list):
+                            return [str(x) for x in res]
+                    except (ValueError, SyntaxError):
+                        pass
+            if "," in v:
+                return [i.strip() for i in v.split(",") if i.strip()]
+            return [v]
+        if isinstance(value, (list, tuple, set)):
+            return [str(x) for x in value]
+        return [str(value)]
 
     @field_validator("SERVER_MASTER_KEY")
     @classmethod
