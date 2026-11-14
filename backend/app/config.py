@@ -161,7 +161,14 @@ class Settings(BaseSettings):
                 "DATABASE_URL contains placeholder password. "
                 "Generate a strong password with: openssl rand -base64 32"
             )
-        return value
+        url = value.strip()
+        if url.startswith("postgres://"):
+            url = "postgresql+asyncpg://" + url[len("postgres://") :]
+        elif url.startswith("postgresql://"):
+            url = "postgresql+asyncpg://" + url[len("postgresql://") :]
+        if "sslmode=" in url:
+            url = url.replace("sslmode=", "ssl=")
+        return url
 
     @property
     def server_master_key_bytes(self) -> bytes:
